@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Halaman Absensi Siswa</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6 card shadow p-4 text-center">
+                <h3>Selamat Datang, {{ session['nama'] }}</h3>
+                <p class="text-muted">Kelas: {{ session['kelas'] }}</p>
+                <hr>
+                
+                <!-- Pratinjau Kamera (Scan Wajah) -->
+                <div class="mb-3">
+                    <video id="video-kamera" width="100%" height="220" autoplay playsinline class="bg-dark rounded shadow-sm" style="object-fit: cover;"></video>
+                </div>
+
+                <p>Pastikan wajah Anda terlihat jelas pada kamera, lalu klik tombol di bawah.</p>
+                
+                <div id="status-presensi" class="mb-3 fw-bold"></div>
+                
+                <button onclick="kirimAbsen()" id="btn-kirim" class="btn btn-success btn-lg w-100">Kirim Absen Sekarang</button>
+                
+                <a href="/logout" class="btn btn-secondary mt-3">Keluar (Logout)</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Canvas Tersembunyi untuk Proses Foto -->
+    <canvas id="canvas-foto" width="640" height="480" style="display:none;"></canvas>
+
+    <!-- Modal Notifikasi Kustom -->
+    <div class="modal fade" id="modalNotifikasi" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content p-3 text-center">
+                <div class="modal-body">
+                    <div id="modal-icon" class="mb-3 fs-1">🎉</div>
+                    <h4 id="modal-title" class="fw-bold mb-2"></h4>
+                    <p id="modal-text" class="text-muted mb-4"></p>
+                    <button type="button" id="modal-btn-action" class="btn btn-success w-100 py-2" data-bs-dismiss="modal">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const video = document.getElementById('video-kamera');
+        const myModal = new bootstrap.Modal(document.getElementById('modalNotifikasi'));
+        let mediaStream = null; // Variabel untuk menyimpan stream kamera
+
+        function tampilkanPesan(title, text, isSuccess = true) {
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-text').innerText = text;
+            
+            const iconEl = document.getElementById('modal-icon');
+            const btnEl = document.getElementById('modal-btn-action');
+
+            if (isSuccess) {
+                iconEl.innerText = "✅";
+                btnEl.className = "btn btn-success w-100 py-2";
+                btnEl.onclick = function() {
+                    location.reload();
+                };
+            } else {
+                iconEl.innerText = "⚠️";
+                btnEl.className = "btn btn-danger w-100 py-2";
+                btnEl.onclick = function() {
+                    myModal.hide();
+                    document.getElementById('btn-kirim').disabled = false;
+                    document.getElementById('btn-kirim').innerText = "Kirim Absen Sekarang";
+                };
+            }
+            myModal.show();
+        }
+
+        // Mengaktifkan Kamera Depan Otomatis di HP / Laptop
+        navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                width: { ideal: 640 }, 
+                height: { ideal: 480 }, 
+                facingMode: "user" 
+            }, 
+            audio: false 
+        })
+        .then(stream => {
+            mediaStream = stream; // Simpan stream aktif
+            video.srcObject = stream;
+        })
+        .catch(err => {
+            console.error("Gagal mengakses kamera: ", err);
+            tampilkanPesan("Akses Kamera Ditolak", "Tidak dapat mengakses kamera! Pastikan izin kamera diizinkan (allow) pada pengaturan browser Anda.", false);
+        });
+
+        // Fungsi untuk mematikan hardware kamera secara total
+        function matikanKamera() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        // Fungsi Kirim Absen (GPS + Foto Wajah)
+        function kirimAbsen() {
+            const btnKirim = document.getElementById('btn-kirim');
+            const statusDiv = document.getElementById("status-presensi");
+            
+            btnKirim.disabled = true;
+            btnKirim.innerText = "Memproses...";
+            statusDiv.innerText = "Mengambil lokasi GPS & Foto Wajah...";
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    const lat = position.coords.latitude;
+                    const lon = position.coords.longitude;
+                    
+                    statusDiv.innerText = "Mengirim data ke server...";
+
+                    const canvas = document.getElementById('canvas-foto');
+                    const context = canvas.getContext('2d');
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    const imageData = canvas.toDataURL('image/jpeg');
+
+                    // MATIKAN KAMERA SEGERA SETELAH FOTO DIAMBIL
+                    matikanKamera();
+
+                    fetch('/proses_absen_gps', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            lat: lat, 
+                            lon: lon, 
+                            image: imageData 
+                        })
+                    })
+                    .then(response => response.text().then(text => {
+                        if (response.ok) {
+                            tampilkanPesan("Berhasil!", text, true);
+                        } else {
+                            tampilkanPesan("Absensi Gagal", text, false);
+                        }
+                    }))
+                    .catch(error => {
+                        console.error('Error:', error);
+                        tampilkanPesan("Kesalahan Jaringan", "Terjadi kesalahan koneksi ke server.", false);
+                    });
+
+                }, function(error) {
+                    tampilkanPesan("GPS Error", "Gagal mendeteksi lokasi GPS. Pastikan GPS/Lokasi perangkat Anda aktif.", false);
+                }, { timeout: 10000 });
+            } else {
+                tampilkanPesan("Tidak Didukung", "Browser Anda tidak mendukung Geolocation.", false);
+            }
+        }
+    </script>
+</body>
+</html>
